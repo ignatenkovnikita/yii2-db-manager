@@ -2,17 +2,17 @@
 
 namespace bs\dbManager\commands;
 
+use bs\dbManager\models\Dump;
+use bs\dbManager\models\Restore;
+use PDO;
+use PDOException;
+use Symfony\Component\Process\Process;
 use Yii;
 use yii\console\Controller;
 use yii\helpers\ArrayHelper;
 use yii\helpers\Console;
 use yii\helpers\FileHelper;
 use yii\helpers\StringHelper;
-use bs\dbManager\models\Dump;
-use bs\dbManager\models\Restore;
-use PDO;
-use PDOException;
-use Symfony\Component\Process\Process;
 
 /**
  * Database backup manager.
@@ -23,6 +23,7 @@ class DumpController extends Controller
     public $gzip = false;
     public $storage = false;
     public $file = null;
+    public $preset = null;
 
     public $defaultAction = 'create';
 
@@ -33,6 +34,7 @@ class DumpController extends Controller
             'gzip',
             'storage',
             'file',
+            'preset',
         ];
     }
 
@@ -43,6 +45,7 @@ class DumpController extends Controller
             'gz' => 'gzip',
             's' => 'storage',
             'f' => 'file',
+            'p' => 'preset'
         ];
     }
 
@@ -66,10 +69,12 @@ class DumpController extends Controller
         });
 
         $allFiles = count($files);
-        foreach ($files as $file) {
-            if ($allFiles == $lastFiles) break;
-            FileHelper::unlink($file);
-            $allFiles--;
+        if ($allFiles >= $lastFiles) {
+            foreach ($files as $file) {
+                if ($allFiles == $lastFiles) break;
+                FileHelper::unlink($file);
+                $allFiles--;
+            }
         }
     }
 
@@ -80,13 +85,17 @@ class DumpController extends Controller
     {
         $this->deleteFiles();
 
-        $model = new Dump($this->getModule()->dbList);
+        $model = new Dump($this->getModule()->dbList, $this->getModule()->customDumpOptions);
         if (ArrayHelper::isIn($this->db, $this->getModule()->dbList)) {
             $dbInfo = $this->getModule()->getDbInfo($this->db);
+            if ($this->preset) {
+                $model->preset = $this->preset;
+            }
             $dumpOptions = $model->makeDumpOptions();
             if ($this->gzip) {
                 $dumpOptions['isArchive'] = true;
             }
+
             $manager = $this->getModule()->createManager($dbInfo);
             $dumpPath = $manager->makePath($this->getModule()->path, $dbInfo, $dumpOptions);
             $dumpCommand = $manager->makeDumpCommand($dumpPath, $dbInfo, $dumpOptions);
@@ -95,28 +104,25 @@ class DumpController extends Controller
             $process->setTimeout($this->getModule()->timeout);
             $process->run();
             if ($process->isSuccessful()) {
-				$uploadResult = true;
+                $uploadResult = true;
                 if ($this->storage) {
                     if (Yii::$app->has('backupStorage')) {
-						Console::output('Opening: '.$dumpPath);
+                        Console::output('Opening: ' . $dumpPath);
 
-						$storage = Yii::createObject([
-							'class' => 'creocoder\flysystem\LocalFilesystem',
-							'path' => dirname($dumpPath),
-						]);
-                        //$dumpText = fopen($dumpPath, 'r+');
+                        $storage = Yii::createObject([
+                            'class' => 'creocoder\flysystem\LocalFilesystem',
+                            'path' => dirname($dumpPath),
+                        ]);
                         $uploadResult = Yii::$app->backupStorage->writeStream(StringHelper::basename($dumpPath), $storage->readStream(StringHelper::basename($dumpPath)));
-                        //fclose($dumpText);
-						//Console::output(print_r($uploadResult, 1));
                     } else {
                         Console::output('Storage component is not configured.');
                     }
                 }
-				if ($uploadResult !== false) {
-					Console::output('Dump successfully created.');
-				}
+                if ($uploadResult !== false) {
+                    Console::output('Dump successfully created.');
+                }
             } else {
-				//Console::output(print_r($process->getErrorOutput(), 1));
+                //Console::output(print_r($process->getErrorOutput(), 1));
                 Console::output('Dump failed create.');
             }
         } else {
